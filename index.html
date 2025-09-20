@@ -1,0 +1,102 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Provably-Fair RNG (Server-backed)</title>
+<style>
+  body{font-family:Inter,Arial;background:#071028;color:#e6eef8;padding:20px}
+  .card{max-width:900px;margin:0 auto;background:#0b1220;padding:16px;border-radius:8px}
+  .big{font-size:32px;font-weight:700}
+  .muted{color:#9fb0c7}
+  .board{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .tile{width:56px;height:56px;background:#123;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700}
+  .tile.highlight{background:linear-gradient(90deg,#2ee88a,#7ee8fa);color:#012;transform:scale(1.06)}
+</style>
+</head>
+<body>
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <div class="muted">Provably-Fair RNG (Server-backed demo)</div>
+      <div class="big" id="timeLeft">--:--</div>
+    </div>
+    <div style="text-align:right">
+      <div class="muted">Round start</div>
+      <div id="roundId">#--</div>
+    </div>
+  </div>
+
+  <div style="margin-top:12px">
+    <div class="muted">Predicted (server reveal at :20)</div>
+    <div id="predicted" style="font-size:28px;margin-top:6px">—</div>
+    <div class="muted" style="margin-top:8px">Final (server confirm at :00): <strong id="final">—</strong></div>
+  </div>
+
+  <div class="board" id="board"></div>
+
+  <div style="margin-top:12px">
+    <button id="regen">Regenerate client seed</button>
+    <span class="muted">Client seed: <span id="clientSeed">—</span></span>
+  </div>
+
+  <hr style="margin:12px 0">
+
+  <div>
+    <div class="muted">Server proof / serverSeed (revealed)</div>
+    <pre id="serverProof" style="background:#071726;color:#bfeff6;padding:8px;border-radius:6px;max-height:220px;overflow:auto">—</pre>
+  </div>
+
+  <div style="margin-top:12px">
+    <div class="muted">History</div>
+    <pre id="history" style="background:#071726;color:#bfeff6;padding:8px;border-radius:6px;max-height:220px;overflow:auto">—</pre>
+  </div>
+</div>
+
+<script>
+const SERVER = '';
+const ROUND=60, REVEAL=20;
+function rndHex(len){ const a=new Uint8Array(len); crypto.getRandomValues(a); return Array.from(a).map(b=>b.toString(16).padStart(2,'0')).join(''); }
+let clientSeed = localStorage.getItem('pf_client') || rndHex(16);
+localStorage.setItem('pf_client', clientSeed);
+document.getElementById('clientSeed').textContent = clientSeed;
+document.getElementById('regen').addEventListener('click', ()=>{ clientSeed = rndHex(16); localStorage.setItem('pf_client', clientSeed); document.getElementById('clientSeed').textContent = clientSeed; });
+
+for(let i=0;i<10;i++){ const t=document.createElement('div'); t.className='tile'; t.id='tile-'+i; t.textContent=i; document.getElementById('board').appendChild(t); }
+
+async function fetchCurrent(){ const r = await fetch('/api/round/current'); return r.json(); }
+async function postReveal(){ const r = await fetch('/api/round/reveal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({clientSeed})}); if(!r.ok) return {ok:false, json: await r.json().catch(()=>null)}; return {ok:true, json: await r.json()}; }
+async function fetchHistory(){ const r=await fetch('/api/round/history'); return r.json(); }
+
+let shownFor=null;
+async function sync(){
+  try{
+    const cur = await fetchCurrent();
+    const now = Math.floor(Date.now()/1000);
+    const roundStart = cur.roundStart;
+    document.getElementById('roundId').textContent = '#'+roundStart;
+    const left = Math.max(0, (roundStart+ROUND)-now);
+    document.getElementById('timeLeft').textContent = `${Math.floor(left/60)}:${String(left%60).padStart(2,'0')}`;
+    if(now >= (roundStart + REVEAL) && shownFor !== roundStart){
+      const res = await postReveal();
+      if(res.ok){
+        const data = res.json;
+        document.getElementById('predicted').textContent = data.predicted;
+        document.getElementById('serverProof').textContent = JSON.stringify(data.proof, null, 2) + '\n\nserverSeed: ' + data.serverSeed;
+        for(let i=0;i<10;i++){ document.getElementById('tile-'+i).classList.remove('highlight'); }
+        const el = document.getElementById('tile-'+data.predicted); if(el) el.classList.add('highlight');
+        shownFor = roundStart;
+      }
+    }
+    if(now >= (roundStart + ROUND)){
+      const h = await fetchHistory();
+      document.getElementById('history').textContent = JSON.stringify(h, null, 2);
+      if(h.rounds && h.rounds[0]) document.getElementById('final').textContent = h.rounds[0].predicted;
+      shownFor = null;
+    }
+  }catch(e){ console.warn(e); }
+  setTimeout(sync,1000);
+}
+sync();
+</script>
+</body>
+</html>
